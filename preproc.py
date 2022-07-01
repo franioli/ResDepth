@@ -1,5 +1,6 @@
 import numpy as np
 import rasterio
+from rasterio.mask import mask as Mask
 
 from pathlib import Path
 import os
@@ -47,13 +48,13 @@ ds_3 = {"name": '3',
 
 # DS4 - nadir
 ds_4 = {"name": '4',
-      "xlim": [416426.000, 416504.000],
-      "ylim": [5091039.000, 5091123.000], 
+      "xlim": [416433.000, 416498.000],
+      "ylim": [5091045.000, 5091117.000], 
       "dsm_z0" : 2000.,
-      "inter_method": 'nearest'      
+      "inter_method": 'linear'      
       }
 
-ds = ds_3
+ds = ds_4
 
 
 #-- Utils
@@ -129,13 +130,17 @@ def preproc_ortofoto(img, inter_method='nearest'):
     img_out = interpolate_missing_pixels(img, mask, method=inter_method)    
     return img_out
 
-def preproc_dsm(dsm, dsm_z0=0):
+def preproc_dsm(dsm, dsm_z0=0., no_data=np.NAN):
     dsm = dsm[0,:]
-    dsm_out = dsm_z0 - crop_dsm
-    dsm = np.expand_dims(dsm, axis=0) 
+    mask = find_holes_channel(dsm, no_data)
+    dsm_interp = interpolate_missing_pixels(dsm, mask, method='nearest')    
+    dsm_out = dsm_z0 - dsm_interp
+    dsm_out = np.expand_dims(dsm_out, axis=0) 
     return dsm_out
 
-#- Cut orthos and DSM
+
+
+#-- Cut orthos and DSM
 ds_path = Path(str(ds['name']))
 if not (root_path/ds_path/out_dir).is_dir():
     os.mkdir(root_path/ds_path/out_dir)
@@ -162,7 +167,7 @@ fnames = list((root_path / ds_path).glob('DJI*.tif'))
 # i = 0; fname = fnames[i]
 for i, fname in enumerate(fnames):
     with rasterio.open(fname, 'r') as dataset:     
-        crop_image, out_transform = rasterio.mask.mask(dataset, shapes, crop=True)
+        crop_image, out_transform = Mask(dataset, shapes, crop=True)
         crop_image_out = preproc_ortofoto(crop_image, inter_method=ds["inter_method"])
         out_meta = dataset.meta
         out_meta.update({"driver": "GTiff",
@@ -180,11 +185,11 @@ for i, fname in enumerate(fnames):
 fnames = list((root_path / ds_path).glob('dsm*.tif'))
 for i, fname in enumerate(fnames):
     with rasterio.open(fname, 'r') as dataset:     
-        crop_dsm, out_transform = rasterio.mask.mask(dataset, shapes, crop=True)
-        crop_dsm_out = preproc_dsm(crop_dsm, dsm_z0=ds['dsm_z0'])
+        crop_dsm, out_transform = Mask(dataset, shapes, crop=True)
+        crop_dsm_out = preproc_dsm(crop_dsm, dsm_z0=ds['dsm_z0'], no_data=-32767.)
         out_meta = dataset.meta
         out_meta.update({"driver": "GTiff",
-                         "dtype": 'uint8',
+                         "dtype": rasterio.float32,
                          "height": crop_image.shape[1],
                          "width": crop_image.shape[2],
                          "count": 1,                     
@@ -194,7 +199,7 @@ for i, fname in enumerate(fnames):
         # out_image[out_image == 0] = 120.
         out_name = Path.joinpath(root_path, ds_path, out_dir, Path(fname).stem+f"_{ds['name']}.tif")
         with rasterio.open(out_name, "w", **out_meta) as dest:
-            dest.write(crop_dsm.astype(rasterio.uint8))
+            dest.write(crop_dsm_out.astype(rasterio.float32))
 
 
 # Fix affine transformation rounding issue...         
@@ -217,37 +222,37 @@ for i, fname in enumerate(fout_names):
         dataset.transform = transform
         dataset.close()
     
-
 #%%
 
 # Fix DSM resolution
-ds_path = Path('belv/preproc/4/out' )
-fnames = ['DJI_0122_cut_4.tif','DJI_0424_cut_4.tif', 'dsm_gt_4.tif']
-fnames = [ds_path/fname for fname in fnames] 
+# ds_path = Path('belv/preproc/4/out' )
+# fnames = ['DJI_0122_cut_4.tif','DJI_0424_cut_4.tif', 'dsm_gt_4.tif']
+# fnames = [ds_path/fname for fname in fnames] 
 
-for i, fname in enumerate(fnames):
-    with rasterio.open(fname, 'r') as dataset:    
-        data = dataset.read(1)
-        data = data[:-1,:]
-        out_meta = dataset.meta
-        out_meta.update({"driver": "GTiff",
-                     "height": data.shape[0],
-                     "width": data.shape[1], 
-                     "count": 1,
-                     "nodata": 0})
-        with rasterio.open(fname, "w", **out_meta) as dest:
-            dest.write(data, indexes=1)
+# for i, fname in enumerate(fnames):
+#     with rasterio.open(fname, 'r') as dataset:    
+#         data = dataset.read(1)
+#         data = data[:-1,:]
+#         out_meta = dataset.meta
+#         out_meta.update({"driver": "GTiff",
+#                      "height": data.shape[0],
+#                      "width": data.shape[1], 
+#                      "count": 1,
+#                      "nodata": 0})
+#         with rasterio.open(fname, "w", **out_meta) as dest:
+#             dest.write(data, indexes=1)
 
-        # out_image, out_transform = mask(dataset, shapes, crop=True)
-        # out_name = Path.joinpath(root_path, ds_path, out_dir, Path(fname).stem+'_cut.tif')
-        # out_meta = dataset.meta
-        # out_meta.update({"driver": "GTiff",
-        #              "height": out_image.shape[1],
-        #              "width": out_image.shape[2],
-        #              "transform": out_transform})
-        # print(out_transform)
-        # with rasterio.open(out_name, "w", **out_meta) as dest:
-        #     dest.write(-out_image)
+
+# out_image, out_transform = mask(dataset, shapes, crop=True)
+# out_name = Path.joinpath(root_path, ds_path, out_dir, Path(fname).stem+'_cut.tif')
+# out_meta = dataset.meta
+# out_meta.update({"driver": "GTiff",
+#              "height": out_image.shape[1],
+#              "width": out_image.shape[2],
+#              "transform": out_transform})
+# print(out_transform)
+# with rasterio.open(out_name, "w", **out_meta) as dest:
+#     dest.write(-out_image)
 
 
 #%% Tests
